@@ -181,10 +181,48 @@ app.post('/api/register', async (req, res) => {
  * Receives readings from devices. Requires deviceId and apiKey in body OR x-api-key header + deviceId in body.
  * Body: { deviceId, value, apiKey? }
  */
+// app.post('/api/gas', async (req, res) => {
+//   try {
+//     const { deviceId, value } = req.body;
+//     let apiKey = req.body.apiKey || req.headers['x-api-key'];
+
+//     if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
+//     if (typeof value === 'undefined') return res.status(400).json({ error: 'value required' });
+
+//     const device = await Device.findOne({ deviceId });
+//     if (!device) return res.status(401).json({ error: 'Invalid device' });
+
+//     if (!apiKey || apiKey !== device.apiKey) {
+//       return res.status(401).json({ error: 'Unauthorized: invalid apiKey' });
+//     }
+
+//     const reading = new GasReading({ deviceId, value });
+//     await reading.save();
+
+//     // emit to Socket.IO room for this device
+//     io.to(deviceId).emit('new-reading', { deviceId, value: reading.value, timestamp: reading.timestamp });
+
+//     // decide threshold: device-specific if set, otherwise global
+//     const threshold = (device.alertThreshold != null) ? device.alertThreshold : GLOBAL_ALERT_THRESHOLD;
+//     if (value >= threshold) {
+//       // send Telegram alert to linked chat (if present)
+//       if (bot && device.telegramChatId) {
+//         const text = `⚠️ *Gas Alert*\nDevice: ${device.deviceName || device.deviceId}\nValue: ${value}\nTime: ${new Date(reading.timestamp).toLocaleString()}`;
+//         bot.sendMessage(device.telegramChatId, text, { parse_mode: 'Markdown' }).catch(e => console.error('Telegram send error', e));
+//       }
+//     }
+
+//     res.status(201).json({ success: true });
+//   } catch (err) {
+//     console.error('API gas error', err);
+//     res.status(500).json({ error: 'server error' });
+//   }
+// });
+
 app.post('/api/gas', async (req, res) => {
   try {
     const { deviceId, value } = req.body;
-    let apiKey = req.body.apiKey || req.headers['x-api-key'];
+    const apiKey = req.body.apiKey || req.headers['x-api-key'];
 
     if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
     if (typeof value === 'undefined') return res.status(400).json({ error: 'value required' });
@@ -192,23 +230,57 @@ app.post('/api/gas', async (req, res) => {
     const device = await Device.findOne({ deviceId });
     if (!device) return res.status(401).json({ error: 'Invalid device' });
 
-    if (!apiKey || apiKey !== device.apiKey) {
+    if (!apiKey || apiKey !== device.apiKey)
       return res.status(401).json({ error: 'Unauthorized: invalid apiKey' });
-    }
 
+    // Save the reading
     const reading = new GasReading({ deviceId, value });
     await reading.save();
 
-    // emit to Socket.IO room for this device
-    io.to(deviceId).emit('new-reading', { deviceId, value: reading.value, timestamp: reading.timestamp });
+    // Notify connected dashboards
+    io.to(deviceId).emit('new-reading', {
+      deviceId,
+      value,
+      timestamp: reading.timestamp,
+    });
 
-    // decide threshold: device-specific if set, otherwise global
-    const threshold = (device.alertThreshold != null) ? device.alertThreshold : GLOBAL_ALERT_THRESHOLD;
-    if (value >= threshold) {
-      // send Telegram alert to linked chat (if present)
+    // Determine threshold
+    const threshold =
+      device.alertThreshold != null
+        ? device.alertThreshold
+        : GLOBAL_ALERT_THRESHOLD;
+
+    const wasActive = device.alertActive;
+    const nowActive = value >= threshold;
+
+    // Update device record
+    device.lastValue = value;
+    device.alertActive = nowActive;
+    await device.save();
+
+    // 🚨 Alert just triggered
+    if (!wasActive && nowActive) {
+      console.log(`🚨 Gas leak detected for ${deviceId} (${value})`);
       if (bot && device.telegramChatId) {
-        const text = `⚠️ *Gas Alert*\nDevice: ${device.deviceName || device.deviceId}\nValue: ${value}\nTime: ${new Date(reading.timestamp).toLocaleString()}`;
-        bot.sendMessage(device.telegramChatId, text, { parse_mode: 'Markdown' }).catch(e => console.error('Telegram send error', e));
+        const text = `🚨 *Gas Alert*\nDevice: ${
+          device.deviceName || device.deviceId
+        }\nValue: ${value}\nTime: ${new Date(reading.timestamp).toLocaleString()}`;
+        bot
+          .sendMessage(device.telegramChatId, text, { parse_mode: 'Markdown' })
+          .catch((e) => console.error('Telegram send error', e));
+      }
+    }
+
+    // ✅ Alert resolved
+    else if (wasActive && !nowActive) {
+      console.log(`✅ Gas level back to normal for ${deviceId} (${value})`);
+      if (bot && device.telegramChatId) {
+        const text = `✅ *Gas Normal*\nDevice: ${
+          device.deviceName || device.deviceId
+        }\nValue: ${value}\nTime: ${new Date(reading.timestamp).toLocaleString()}`;
+        bot
+          .sendMessage(device.telegramChatId, text, { parse_mode: 'Markdown' })
+          .catch((e) => console.error('Telegram send error', e));
       }
     }
 
@@ -218,6 +290,7 @@ app.post('/api/gas', async (req, res) => {
     res.status(500).json({ error: 'server error' });
   }
 });
+
 
 /**
  * GET /api/gas?deviceId=...&limit=..
