@@ -1,0 +1,119 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Gas Monitor Dashboard</title>
+
+  <!-- Socket.IO client -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Chart.js for graph display -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
+      padding: 16px;
+      margin: 0;
+    }
+    h2 {
+      color: #333;
+      margin-bottom: 20px;
+    }
+    #chart {
+      width: 100%;
+      max-width: 900px;
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.1);
+    }
+    .info {
+      margin-top: 16px;
+      font-size: 18px;
+      color: #444;
+    }
+    .alert {
+      color: #d32f2f;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>🔥 LPG Gas Leakage Monitor — Live Dashboard</h2>
+
+  <canvas id="chart" height="120"></canvas>
+  <div class="info">
+    Latest Value: <span id="latest">--</span><br />
+    Status: <span id="status">Waiting for data...</span>
+  </div>
+
+  <script>
+    const socket = io();
+    const ctx = document.getElementById('chart').getContext('2d');
+    const labels = [];
+    const data = [];
+
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Gas Sensor Value (Analog)',
+          data: data,
+          fill: false,
+          borderColor: '#1976d2',
+          borderWidth: 2,
+          tension: 0.3,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          x: {
+            display: true,
+            title: { display: true, text: 'Time' }
+          },
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: 'Sensor Value' }
+          }
+        }
+      }
+    });
+
+    // Helper function to push new points
+    function pushPoint(value, timestamp) {
+      const t = new Date(timestamp).toLocaleTimeString();
+      labels.push(t);
+      data.push(value);
+
+      // Keep only last 50 readings
+      if (labels.length > 50) {
+        labels.shift();
+        data.shift();
+      }
+
+      chart.update();
+      document.getElementById('latest').innerText = value;
+      document.getElementById('status').innerHTML =
+        value >= 400
+          ? '<span class="alert">⚠️ High Gas Level Detected!</span>'
+          : '✅ Normal Levels';
+    }
+
+    // Fetch last few readings on load
+    fetch('/api/gas?limit=50')
+      .then(r => r.json())
+      .then(list => list.reverse().forEach(item => pushPoint(item.value, item.timestamp)))
+      .catch(err => console.error(err));
+
+    // Receive new readings via WebSocket
+    socket.on('new-reading', payload => {
+      pushPoint(payload.value, payload.timestamp);
+    });
+  </script>
+</body>
+</html>
