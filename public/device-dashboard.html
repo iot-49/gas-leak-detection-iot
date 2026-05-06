@@ -572,6 +572,82 @@
       to { transform: translateX(400px); opacity: 0; }
     }
 
+    /* Security Events Panel */
+    .security-card {
+      background: rgba(15, 23, 42, 0.7);
+      backdrop-filter: blur(20px) saturate(180%);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 24px;
+      padding: 35px;
+      margin-bottom: 30px;
+      animation: fadeInUp 0.8s ease-out 0.5s both;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .security-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #ef4444, #f59e0b, #ef4444);
+    }
+
+    .security-card h2 {
+      font-size: 1.5rem;
+      color: #f1f5f9;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .event-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .event-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 16px;
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 12px;
+      border-left: 3px solid #ef4444;
+      font-size: 0.88rem;
+    }
+
+    .event-item.anomaly { border-left-color: #f59e0b; }
+    .event-item.info { border-left-color: #3b82f6; }
+
+    .event-type {
+      font-weight: 700;
+      color: #ef4444;
+      min-width: 130px;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .event-item.anomaly .event-type { color: #f59e0b; }
+    .event-item.info .event-type { color: #3b82f6; }
+
+    .event-details { color: #94a3b8; flex: 1; }
+    .event-time { color: #64748b; font-size: 0.78rem; white-space: nowrap; }
+
+    .no-events {
+      color: #10b981;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.95rem;
+    }
+
     /* Footer */
     .footer {
       margin-top: 60px;
@@ -730,11 +806,26 @@
         <span id="copyBtnText">Copy Command</span>
       </button>
     </div>
+
+    <!-- Security Events Panel -->
+    <div class="security-card">
+      <h2>
+        <i class="fas fa-shield-halved" style="color: #ef4444;"></i>
+        Security Events
+      </h2>
+      <div class="event-list" id="eventList">
+        <div class="no-events">
+          <i class="fas fa-circle-check"></i>
+          <span>No security events recorded.</span>
+        </div>
+      </div>
+    </div>
   </div>
 
 <script>
   const socket = io();
   const deviceId = window.location.pathname.split('/').pop();
+  const token = new URLSearchParams(window.location.search).get('token');
   document.getElementById('meta').innerText = 'Device ID: ' + deviceId;
 
   socket.emit('join-device', deviceId);
@@ -865,23 +956,57 @@
     statusEl.innerHTML = statusHTML;
   }
 
-  // Fetch recent readings
-  fetch('/api/gas?deviceId=' + deviceId + '&limit=60')
-    .then(r => r.json())
+  // Fetch recent readings (token required)
+  fetch('/api/gas?deviceId=' + deviceId + '&token=' + token + '&limit=60')
+    .then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
     .then(list => {
       list.reverse().forEach(it => pushPoint(it.value, it.timestamp));
     })
     .catch(err => {
       console.error('Error fetching data:', err);
-      document.getElementById('status').innerHTML = 
+      document.getElementById('status').innerHTML =
         '<span class="status-badge status-warning"><i class="fas fa-exclamation-circle"></i><span>Connection Error</span></span>';
     });
+
+  // Fetch security events
+  function loadSecurityEvents() {
+    fetch('/api/security-events?deviceId=' + deviceId + '&token=' + token)
+      .then(r => r.ok ? r.json() : [])
+      .then(events => {
+        const list = document.getElementById('eventList');
+        if (!events.length) return;
+        list.innerHTML = '';
+        events.forEach(ev => {
+          const isAnomaly = ev.eventType.startsWith('ANOMALY');
+          const isInfo = ev.eventType === 'INVALID_VALUE';
+          const div = document.createElement('div');
+          div.className = 'event-item' + (isAnomaly ? ' anomaly' : isInfo ? ' info' : '');
+          div.innerHTML =
+            '<span class="event-type">' + ev.eventType + '</span>' +
+            '<span class="event-details">' + (ev.details || '') + '</span>' +
+            '<span class="event-time">' + new Date(ev.timestamp).toLocaleTimeString() + '</span>';
+          list.appendChild(div);
+        });
+      })
+      .catch(() => {});
+  }
+  loadSecurityEvents();
 
   // Live updates from Socket.IO
   socket.on('new-reading', payload => {
     if (payload.deviceId === deviceId) {
       pushPoint(payload.value, payload.timestamp);
     }
+  });
+
+  // Security alert from server (anomaly detected)
+  socket.on('security-alert', payload => {
+    loadSecurityEvents();
+    const label = payload.type === 'ANOMALY_FLAT' ? 'Sensor Spoofing Detected' : 'Abnormal Spike Detected';
+    showToast(label, 'error');
   });
 
   // Telegram command setup

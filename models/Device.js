@@ -17,8 +17,11 @@ const deviceSchema = new mongoose.Schema({
   alertThreshold: { type: Number, default: 400 },
   telegramChatId: String,
   dashboardUrl: String,
-  alertActive: { type: Boolean, default: false }, // 👈 NEW
-  lastValue: { type: Number, default: 0 },        // 👈 NEW
+  alertActive: { type: Boolean, default: false },
+  lastValue: { type: Number, default: 0 },
+  // Security fields
+  lastTimestamp: { type: Number, default: 0 },      // last accepted request timestamp (ms) — replay prevention
+  lastReadings: { type: [Number], default: [] },    // rolling window of last 10 values — anomaly detection
 });
 
 
